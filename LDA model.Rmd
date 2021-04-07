@@ -3,26 +3,233 @@ title: "LDA model"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r, include=FALSE}
+rm(list=ls(all=T))
+options(stringsAsFactors = F)         
+options("scipen" = 100, "digits" = 4) 
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r, include=FALSE}
+library(tm)
+library(topicmodels)
+library(lda)
+library(textstem)
+library(tidyverse)
+library(reshape2)
+library(stopwords)
+library(data.table)
+library(ggplot2)
+library(pals)
 ```
 
-## Including Plots
+# Loading and Pre-processing the Data
 
-You can also embed plots, for example:
+I used about 50,000 data points from the larger set to run this model. I am waiting to run it on the whole set until I work through the remaining issues, just to cut down on run time. In this section, I need to preprocess more neatly and work on adding a lemmatizer, in addition to a stemmer, as the stemmer here isn't as effective as I had hoped it would be, hence the manual removals of some words.
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+Lastly, I used multiple methods for stop word removal, which is probably not the best practice. However, these methods seemed to work best in tandem with one another.
+
+```{r}
+
+# Load and process data extension
+pdata_extension<- read.csv("~/Desktop/cepa_extension.csv", head(T))
+
+#change order of columns  
+data_extension <- pdata_extension[, c(2,3,4,5,7,8,6)]
+
+# rename column where name is "content" and "content_id"
+names(data_extension)[names(data_extension) == "content_id"] <- "doc_id"
+names(data_extension)[names(data_extension) == "content"] <- "text"
+colnames(data_extension)
+
+# Load and process data part one
+#pdata_set_p1<- read.csv("~/Desktop/covid_disinfo_data.csv", head(T))
+
+#change order of columns  
+#data_set_p1 <- pdata_set_p1[, c(1,2,3,4,6,7,5)]
+
+# rename column where name is "content" and "content_id"
+#names(data_set_p1)[names(data_set_p1) == "content_id"] <- "doc_id"
+#names(data_set_p1)[names(data_set_p1) == "content"] <- "text"
+#colnames(data_set_p1)
+
+# combine the multiple data sets into one data set 
+#data_set <- rbind(data_set_p1,data_extension)
+#nrow(data_set)
+
+# Load and process data 
+pdata_set_p1<- read.csv("~/Desktop/all_data_csv.csv", head(T))
+nrow(pdata_set_p1)
+
+#change order of columns  
+data_set_p1 <- pdata_set_p1[, c(1,2,3,4,6,7,5)]
+
+# rename column where name is "content" and "content_id"
+names(data_set_p1)[names(data_set_p1) == "content_id"] <- "doc_id"
+names(data_set_p1)[names(data_set_p1) == "content"] <- "text"
+colnames(data_set_p1)
+
+# combine the multiple data sets into one data set 
+data_set <- rbind(data_set_p1,data_extension)
+nrow(data_set)
+
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}              
+corpus <- Corpus(DataframeSource(data_set))
+
+stopwords_en <- stopwords::stopwords("en", source = "snowball")
+english_stopwords <- readLines("https://slcladal.github.io/resources/stopwords_en.txt", encoding = "UTF-8")
+
+```
+
+```{r}
+# Pre-processing commands
+
+# Remove all capital letters
+cleaned_corpus <- tm_map(corpus, content_transformer(tolower))
+```
+
+```{r}
+# Some not very graceful pre-processing ...
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "amid", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "http.*", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "#.*", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "ð.*", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "@.*", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "sputnik", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = ".*.com", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "china plus news", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "rt", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "day", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "chinese", replacement =  "china")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "russian", replacement =  "russia")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "â", replacement = "a", fixed=TRUE)
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "hong kong ", replacement = "hongkong")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = " a ", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "€", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "“", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "covid-", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "corona", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "coronavirus", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "covid", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "virus", replacement =  "")
+cleaned_corpus <- tm_map(cleaned_corpus, content_transformer(gsub), pattern = "pandemic", replacement =  "")
+
+# Performed multiple stop word removal methods to ensure all stop words removed 
+cleaned_corpus <- tm_map(cleaned_corpus, removeWords, stopwords_en)
+cleaned_corpus <- tm_map(cleaned_corpus, removeWords, stopwords("english"))
+cleaned_corpus <- tm_map(cleaned_corpus, removeWords, english_stopwords)
+
+# other pre-processing commands 
+cleaned_corpus <- tm_map(cleaned_corpus, removePunctuation, preserve_intra_word_dashes = TRUE)
+cleaned_corpus <- tm_map(cleaned_corpus, removeNumbers)
+cleaned_corpus <- tm_map(cleaned_corpus, stemDocument, language = "en")
+cleaned_corpus <- tm_map(cleaned_corpus, stripWhitespace)
+
+# create DTM; set minimum term frequency
+minimumTermFrequency <- 4
+DTM <- DocumentTermMatrix(cleaned_corpus, control = list(bounds = list(global = c(minimumTermFrequency, Inf))))
+
+```
+
+# The Number of Terms in the DTM
+
+
+```{r}
+# number of documents and terms in the matrix
+dim(DTM)
+
+# remove empty rows from DTM
+sel_idx <- slam::row_sums(DTM) > 0
+DTM <- DTM[sel_idx, ]
+data_set <- data_set[sel_idx, ]
+```
+
+# Choosing K
+
+Here, I chose a k value of 15. This appeared to garner the most accurate results, when compared to k=10 and k=20, however, I still need to further experiment with a wider range of potential k values to improve this model's accuracy.
+
+```{r}
+# Choose number of topics
+K <- 15
+
+# sets the seed for random number generator 
+set.seed(5253)
+
+# Create the LDA model from the DTM using Gibbs sampling method
+lda_Model <- LDA(DTM, K, method="Gibbs", control=list(iter = 600, verbose = 25))
+
+# Generate posterior distributions
+lda_ModelResult <- posterior(lda_Model)
+attributes(lda_ModelResult)
+nTerms(DTM)             
+
+# Topics as probability distributions over the vocabulary
+beta <- lda_ModelResult$terms   
+dim(beta)               
+nDocs(DTM)           
+theta <- lda_ModelResult$topics 
+dim(theta)               
+```
+
+# The Topics Reported by the LDA
+
+This code is set to generate the most probable 10 terms of each k topic.
+
+
+```{r}
+# Generates 10 most likely terms in each of the k topics
+terms(lda_Model, 10)
+
+```
+
+# Naming the Topics Reported by the LDA
+
+This code names the k topics with the 5 most frequent terms in each topic. 
+
+```{r}
+# Create "names" for the k topics by binding together 5 most likely terms in each topic
+namesTop5 <- terms(lda_Model, 5)
+topic_Names <- apply(namesTop5, 2, paste, collapse=" ")
+topic_Names
+```
+
+# Sorting the Topics by Frequency -- Part 1 
+
+This code sorts and orders the topics by how often they emerge in the documents as an entire collection. Most common is the topic that corresponds with the corpus " case updat death number toll." This topic is likely "Case/death counts," or something similar.
+
+```{r}
+# re-rank top topic terms for topic names
+topic_Names <- apply(lda::top.topic.words(beta, 5, by.score = T), 2, paste, collapse = " ")
+
+# find most likely topics in entire collection
+topic_Proportions <- colSums(theta) / nDocs(DTM)  
+names(topic_Proportions) <- topic_Names     
+sort(topic_Proportions, decreasing = TRUE) 
+
+ordered_list <- sort(topic_Proportions, decreasing = TRUE)
+paste(round(ordered_list, 5), ":", names(ordered_list))
+
+
+```
+
+
+# Sorting the Topics by Frequency -- Part 2
+
+This code calculates how often a topic emerges as the main topic of one of the documents, with the number of instances reported as the numeric value along side the topic name.
+
+
+```{r}
+count_main_topics <- rep(0, K)
+names(count_main_topics) <- topic_Names
+for (i in 1:nDocs(DTM)) {
+  num_topics_in_each_doc <- theta[i, ] 
+  main_topic <- order(num_topics_in_each_doc, decreasing = TRUE)[1] 
+  count_main_topics[main_topic] <- count_main_topics[main_topic] + 1
+}
+sort(count_main_topics, decreasing = TRUE)
+
+sorted <- sort(count_main_topics, decreasing = TRUE)
+paste(sorted, ":", names(sorted))
+```
